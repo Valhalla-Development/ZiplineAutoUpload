@@ -1,0 +1,19 @@
+# ========================
+# System generated files
+# ========================
+
+# macOS generated files
+.DS_Store
+
+# ========================
+# IDEs and editors
+# ========================
+
+# JetBrains IDEs (e.g., WebStorm, IntelliJ)
+.idea/
+
+# ========================
+# Misc
+# ========================
+
+dev.log
