@@ -36,7 +36,7 @@ class MonitorFolder(FileSystemEventHandler):
                 mimetypes.guess_type(event.src_path)[0],
             )
         }
-        response = requests.post(api_url, headers=headers, files=files)
+        response = requests.post(api_url, headers=headers, files=files, timeout=10)
 
         if response.status_code == 200:
             print("File Uploaded Successfully.")
