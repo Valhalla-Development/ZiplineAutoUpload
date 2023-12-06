@@ -1,11 +1,11 @@
-import os.path
-import requests
 import mimetypes
-import pyperclip
+import os.path
 from time import sleep
-from watchdog.observers import Observer
-from watchdog.events import FileSystemEventHandler
 
+import pyperclip
+import requests
+from watchdog.events import FileSystemEventHandler
+from watchdog.observers import Observer
 
 # Absolute path to the folder to monitor for new files
 MONITOR_FOLDER_PATH = "<path>"
