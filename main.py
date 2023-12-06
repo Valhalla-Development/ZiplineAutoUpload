@@ -7,27 +7,32 @@ from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
 
+# Absolute path to the folder to monitor for new files
+MONITOR_FOLDER_PATH = "<path>"
+# List of valid file extensions that will be considered for upload
+VALID_EXTENSIONS = [".png", ".jpg", ".jpeg", ".mov"]
+# The URL of the API endpoint for uploading files to your Zipline instance
+API_UPLOAD_URL = "https://<domain>/api/upload"
+# The access token associated with your user account for authentication
+USER_ACCESS_TOKEN = "<access_token>"
+# The maximum allowable size for an individual file, specified in megabytes
+MAX_FILE_SIZE_MB = 40
+
+
 class MonitorFolder(FileSystemEventHandler):
     def on_created(self, event):
-        # Array of valid file types
-        valid_extensions = [".png", ".jpg", ".jpeg", ".mov"]
-        # API URL for your Zipline instance
-        api_url = "https://<your-domain>/api/upload"
-        # Access token for your account
-        access_token = "<your-api-token>"
-
         # Return if the file is not a valid file
         if not os.path.isfile(event.src_path):
             return
 
         # Return if the file does not have an acceptable file type
-        if os.path.splitext(event.src_path)[1] not in valid_extensions:
+        if os.path.splitext(event.src_path)[1] not in VALID_EXTENSIONS:
             print(f"Error: {os.path.basename(event.src_path)} has an unsupported file extension. "
-                  f"Allowed extensions: {', '.join(valid_extensions)}")
+                  f"Allowed extensions: {', '.join(VALID_EXTENSIONS)}")
             return
 
         # Return if file size is greater than 40MB
-        if os.path.getsize(event.src_path) >= 40 * (1 << 20):
+        if os.path.getsize(event.src_path) >= MAX_FILE_SIZE_MB * (1 << 20):
             print(f"Error: {os.path.basename(event.src_path)} exceeds the permitted file size limit "
                   f"({os.path.getsize(event.src_path) / (1 << 20):.2f}MB > 40MB).")
             return
@@ -35,7 +40,7 @@ class MonitorFolder(FileSystemEventHandler):
         sleep(0.02)
 
         try:
-            headers = {"Authorization": f"{access_token}"}
+            headers = {"Authorization": f"{USER_ACCESS_TOKEN}"}
             files = {
                 "file": (
                     os.path.basename(event.src_path),
@@ -43,7 +48,7 @@ class MonitorFolder(FileSystemEventHandler):
                     mimetypes.guess_type(event.src_path)[0],
                 )
             }
-            response = requests.post(api_url, headers=headers, files=files, timeout=10)
+            response = requests.post(API_UPLOAD_URL, headers=headers, files=files, timeout=10)
 
             if response.status_code == 200:
                 print(f"File Uploaded Successfully: {response.json()['files'][0]}")
@@ -57,16 +62,13 @@ class MonitorFolder(FileSystemEventHandler):
 
 
 if __name__ == "__main__":
-    # Absolute path to monitor for new files
-    path = "<your-absolute-path>"
-
     # Check if the path exists
-    if not os.path.exists(path):
-        raise FileNotFoundError(f"The specified path does not exist: {path}")
+    if not os.path.exists(MONITOR_FOLDER_PATH):
+        raise FileNotFoundError(f"The specified path does not exist: {MONITOR_FOLDER_PATH}")
 
     event_handler = MonitorFolder()
     observer = Observer()
-    observer.schedule(event_handler, path=path)
+    observer.schedule(event_handler, path=MONITOR_FOLDER_PATH)
     print("Monitoring started")
     observer.start()
 
