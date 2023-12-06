@@ -51,9 +51,11 @@ class MonitorFolder(FileSystemEventHandler):
             response = requests.post(API_UPLOAD_URL, headers=headers, files=files, timeout=10)
 
             if response.status_code == 200:
-                print(f"File Uploaded Successfully: {response.json()['files'][0]}")
+                print(f"File uploaded successfully: {response.json()['files'][0]}")
                 # Copy the URL to the clipboard
                 pyperclip.copy(response.json()["files"][0])
+            elif response.status_code == 401:
+                print("Authentication failed. Please check your USER_ACCESS_TOKEN.")
             else:
                 print(f"File upload failed. Status code: {response.status_code}")
         except PermissionError as error:
