@@ -70,7 +70,7 @@ if __name__ == "__main__":
 
     event_handler = MonitorFolder()
     observer = Observer()
-    observer.schedule(event_handler, path=MONITOR_FOLDER_PATH)
+    observer.schedule(event_handler, path=MONITOR_FOLDER_PATH, recursive=True)
     print("Monitoring started")
     observer.start()
 
