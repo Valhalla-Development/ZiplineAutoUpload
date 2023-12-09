@@ -3,7 +3,7 @@ import os.path
 from time import sleep
 
 import pyperclip
-import requests
+from requests import post
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
@@ -11,11 +11,11 @@ from watchdog.observers import Observer
 MONITOR_FOLDER_PATH = "<path>"
 # List of valid file extensions that will be considered for upload
 VALID_EXTENSIONS = [".png", ".jpg", ".jpeg", ".mov"]
-# The URL of the API endpoint for uploading files to your Zipline instance
+# URL of the API endpoint for uploading files to your Zipline instance
 API_UPLOAD_URL = "https://<domain>/api/upload"
-# The access token associated with your user account for authentication
+# Access token associated with your user account for authentication
 USER_ACCESS_TOKEN = "<access_token>"
-# The maximum allowable size for an individual file, specified in megabytes
+# Maximum allowable size for an individual file in megabytes
 MAX_FILE_SIZE_MB = 40
 
 
@@ -39,6 +39,7 @@ class MonitorFolder(FileSystemEventHandler):
 
         sleep(0.02)
 
+        # Upload the file to Zipline
         try:
             headers = {"Authorization": f"{USER_ACCESS_TOKEN}"}
             files = {
@@ -48,7 +49,7 @@ class MonitorFolder(FileSystemEventHandler):
                     mimetypes.guess_type(event.src_path)[0],
                 )
             }
-            response = requests.post(API_UPLOAD_URL, headers=headers, files=files, timeout=10)
+            response = post(API_UPLOAD_URL, headers=headers, files=files, timeout=10)
 
             if response.status_code == 200:
                 print(f"File uploaded successfully: {response.json()['files'][0]}")
