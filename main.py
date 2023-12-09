@@ -45,23 +45,27 @@ def upload_file(path):
         return
 
 
+def validate_file(path):
+    # Return if the file is not a valid file
+    if not isfile(path):
+        return
+
+    # Return if the file does not have an acceptable file type
+    if splitext(path)[1] not in VALID_EXTENSIONS:
+        print(f"Error: {basename(path)} has an unsupported file extension. "
+              f"Allowed extensions: {', '.join(VALID_EXTENSIONS)}")
+        return
+
+    # Return if file size is greater than 40MB
+    if getsize(path) >= MAX_FILE_SIZE_MB * (1 << 20):
+        print(f"Error: {basename(path)} exceeds the permitted file size limit "
+              f"({getsize(path) / (1 << 20):.2f}MB > 40MB).")
+        return
+
+
 class MonitorFolder(FileSystemEventHandler):
     def on_created(self, event):
-        # Return if the file is not a valid file
-        if not isfile(event.src_path):
-            return
-
-        # Return if the file does not have an acceptable file type
-        if splitext(event.src_path)[1] not in VALID_EXTENSIONS:
-            print(f"Error: {basename(event.src_path)} has an unsupported file extension. "
-                  f"Allowed extensions: {', '.join(VALID_EXTENSIONS)}")
-            return
-
-        # Return if file size is greater than 40MB
-        if getsize(event.src_path) >= MAX_FILE_SIZE_MB * (1 << 20):
-            print(f"Error: {basename(event.src_path)} exceeds the permitted file size limit "
-                  f"({getsize(event.src_path) / (1 << 20):.2f}MB > 40MB).")
-            return
+        validate_file(event.src_path)
 
         sleep(0.02)
 
