@@ -19,38 +19,6 @@ USER_ACCESS_TOKEN = "<access_token>"
 MAX_FILE_SIZE_MB = 40
 
 
-def upload_file(path):
-    """
-    Uploads a file to the Zipline API.
-
-    Parameters:
-    - path (str): The absolute path to the file.
-
-    Returns:
-    None
-    """
-    try:
-        headers = {"Authorization": f"{USER_ACCESS_TOKEN}"}
-        files = {
-            "file": (
-                basename(path),
-                open(path, "rb"),
-                guess_type(path)[0],
-            )
-        }
-        response = post(API_UPLOAD_URL, headers=headers, files=files, timeout=10)
-
-        if response.status_code == 200:
-            print(f"File uploaded successfully: {response.json()['files'][0]}")
-            copy(response.json()["files"][0])  # Copy the URL to the clipboard
-        elif response.status_code == 401:
-            print("Authentication failed. Please check your USER_ACCESS_TOKEN.")
-        else:
-            print(f"File upload failed. Status code: {response.status_code}")
-    except PermissionError as error:
-        print(error)
-
-
 def validate_file(path):
     """
     Validates a file based on its type and size.
@@ -61,7 +29,7 @@ def validate_file(path):
     Returns:
     - bool: True if the file is valid, False otherwise.
     """
-    if not isfile(path):
+    if not isfile(path) or basename(path).startswith('.'):
         return False
 
     if splitext(path)[1] not in VALID_EXTENSIONS:
@@ -78,7 +46,69 @@ def validate_file(path):
 
 
 class MonitorFolder(FileSystemEventHandler):
-    def on_created(self, event):
+    def __init__(self):
+        self.array = []
+
+    def handle_array(self, event):
+        """
+        Handles an array of files by processing each file in the array and updating the `array` attribute.
+
+        Parameters:
+        - self (object): The object handling the array of files.
+        - event (event.FileSystemEvent): The event representing the file being processed.
+
+        Returns:
+            bool: Whether the function executed successfully or not.
+        """
+        seen_files = set()
+        unique_array = []
+
+        for item in self.array:  # Loop through the array of files and process each one
+            if item['file'] not in seen_files:
+                unique_array.append(item)
+                seen_files.add(item['file'])
+
+        self.array = unique_array  # Update the `array` attribute with the list of unique files
+
+        for item in self.array:
+            if item['file'] == event.src_path and item['status'] == 'processed':
+                return False
+
+        for item in self.array:
+            if item['file'] == event.src_path:
+                item['status'] = 'processed'  # Mark the file as processed
+
+        if len(self.array) > 10:  # If the array has more than 10 items, remove the oldest ones
+            self.array = self.array[-10:]
+
+        return True
+
+    def upload_file(self, event):
+        try:
+            if not self.handle_array(event):
+                return
+
+            headers = {"Authorization": f"{USER_ACCESS_TOKEN}"}
+            files = {
+                "file": (
+                    basename(event.src_path),
+                    open(event.src_path, "rb"),
+                    guess_type(event.src_path)[0],
+                )
+            }
+            response = post(API_UPLOAD_URL, headers=headers, files=files, timeout=10)
+
+            if response.status_code == 200:
+                print(f"File uploaded successfully: {response.json()['files'][0]}")
+                copy(response.json()["files"][0])  # Copy the URL to the clipboard
+            elif response.status_code == 401:
+                print("Authentication failed. Please check your USER_ACCESS_TOKEN.")
+            else:
+                print(f"File upload failed. Status code: {response.status_code}")
+        except PermissionError as error:
+            print(error)
+
+    def on_any_event(self, event):
         """
         Event handler for created files in the monitored folder.
 
@@ -88,12 +118,17 @@ class MonitorFolder(FileSystemEventHandler):
         Returns:
         None
         """
+        if event.event_type not in ['created', 'modified']:
+            return
+
         if not validate_file(event.src_path):
             return  # Exit early if validation fails
 
+        self.array.append({'file': event.src_path, 'status': 'processing'})
+
         sleep(0.02)  # Apply a small sleep time to allow for system events
 
-        upload_file(event.src_path)  # Attempt to upload the file
+        self.upload_file(event)  # Attempt to upload the file
 
 
 if __name__ == "__main__":
