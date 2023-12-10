@@ -63,23 +63,17 @@ class MonitorFolder(FileSystemEventHandler):
         seen_files = set()
         unique_array = []
 
-        for item in self.array:  # Loop through the array of files and process each one
+        for item in reversed(self.array):  # Loop through the array of files and process each one
             if item['file'] not in seen_files:
                 unique_array.append(item)
                 seen_files.add(item['file'])
 
-        self.array = unique_array  # Update the `array` attribute with the list of unique files
-
-        for item in self.array:
-            if item['file'] == event.src_path and item['status'] == 'processed':
-                return False
-
-        for item in self.array:
             if item['file'] == event.src_path:
+                if item['status'] == 'processed':
+                    return False
                 item['status'] = 'processed'  # Mark the file as processed
 
-        if len(self.array) > 10:  # If the array has more than 10 items, remove the oldest ones
-            self.array = self.array[-10:]
+        self.array = unique_array[-10:]  # Keep the last 10 items in the array
 
         return True
 
