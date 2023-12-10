@@ -59,19 +59,22 @@ def validate_file(path):
     - path (str): The absolute path to the file.
 
     Returns:
-    None
+    - bool: True if the file is valid, False otherwise.
     """
     if not isfile(path):
-        return
+        return False
 
     if splitext(path)[1] not in VALID_EXTENSIONS:
         print(f"Error: {basename(path)} has an unsupported file extension. "
               f"Allowed extensions: {', '.join(VALID_EXTENSIONS)}")
-        return
+        return False
 
     if getsize(path) >= MAX_FILE_SIZE_MB * (1 << 20):
         print(f"Error: {basename(path)} exceeds the permitted file size limit "
               f"({getsize(path) / (1 << 20):.2f}MB > 40MB).")
+        return False
+
+    return True
 
 
 class MonitorFolder(FileSystemEventHandler):
@@ -85,7 +88,8 @@ class MonitorFolder(FileSystemEventHandler):
         Returns:
         None
         """
-        validate_file(event.src_path)  # Attempt to validate the file; return if an issue arises
+        if not validate_file(event.src_path):
+            return  # Exit early if validation fails
 
         sleep(0.02)  # Apply a small sleep time to allow for system events
 
