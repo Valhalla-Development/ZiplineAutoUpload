@@ -17,6 +17,10 @@ API_UPLOAD_URL = "https://<domain>/api/upload"
 USER_ACCESS_TOKEN = "<access_token>"
 # The maximum allowable size for an individual file, specified in megabytes
 MAX_FILE_SIZE_MB = 40
+# A dictionary containing upload options for the Zipline API.
+# For detailed information on available options, refer to the official documentation:
+# https://zipline.diced.sh/docs/guides/upload-options
+UPLOAD_OPTIONS = {"Format": "RANDOM", "Embed": "false"}
 
 
 def validate_file(path):
@@ -82,7 +86,7 @@ class MonitorFolder(FileSystemEventHandler):
             if not self.handle_array(event):
                 return
 
-            headers = {"Authorization": f"{USER_ACCESS_TOKEN}"}
+            headers = {"Authorization": USER_ACCESS_TOKEN, **UPLOAD_OPTIONS}
             files = {
                 "file": (
                     basename(event.src_path),
