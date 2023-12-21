@@ -1,6 +1,7 @@
 from mimetypes import guess_type
 from os.path import basename, isfile, splitext, getsize, exists
 from time import sleep
+from webbrowser import open
 
 from pyperclip import copy
 from requests import post
@@ -21,6 +22,8 @@ MAX_FILE_SIZE_MB = 40
 # For detailed information on available options, refer to the official documentation:
 # https://zipline.diced.sh/docs/guides/upload-options
 UPLOAD_OPTIONS = {"Format": "RANDOM", "Embed": "false"}
+# Used to decide if the URL for the uploaded files should open in the browser.
+OPEN_URL_IN_BROWSER = False
 
 
 def validate_file(path):
@@ -99,6 +102,9 @@ class MonitorFolder(FileSystemEventHandler):
             if response.status_code == 200:
                 print(f"File uploaded successfully: {response.json()['files'][0]}")
                 copy(response.json()["files"][0])  # Copy the URL to the clipboard
+
+                if OPEN_URL_IN_BROWSER:
+                    open(response.json()["files"][0])  # Open the uploaded file in the browser if OPEN_URL_IN_BROWSER
             elif response.status_code == 401:
                 print("Authentication failed. Please check your USER_ACCESS_TOKEN.")
             else:
