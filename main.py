@@ -1,7 +1,7 @@
+import webbrowser
 from mimetypes import guess_type
 from os.path import basename, isfile, splitext, getsize, exists
 from time import sleep
-from webbrowser import open
 
 from pyperclip import copy
 from requests import post
@@ -104,7 +104,8 @@ class MonitorFolder(FileSystemEventHandler):
                 copy(response.json()["files"][0])  # Copy the URL to the clipboard
 
                 if OPEN_URL_IN_BROWSER:
-                    open(response.json()["files"][0])  # Open the uploaded file in the browser if OPEN_URL_IN_BROWSER
+                    webbrowser.open(
+                        response.json()["files"][0])  # Open the uploaded file in the browser if OPEN_URL_IN_BROWSER
             elif response.status_code == 401:
                 print("Authentication failed. Please check your USER_ACCESS_TOKEN.")
             else:
