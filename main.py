@@ -1,6 +1,7 @@
 import webbrowser
 from mimetypes import guess_type
 from os.path import basename, isfile, splitext, getsize, exists
+from os import rename
 from time import sleep
 
 from pyperclip import copy
@@ -48,6 +49,15 @@ def validate_file(path):
         print(f"Error: {basename(path)} exceeds the permitted file size limit "
               f"({getsize(path) / (1 << 20):.2f}MB > 40MB).")
         return False
+
+    
+    # Validation check for actively written video format files
+    if exists(path):
+        try:
+            rename(path, path) # Attemps to "rename" the file when being validated, which errors if the file is in use
+                               # This ensures that a video will only upload when ready 
+        except OSError:
+            return False
 
     return True
 
