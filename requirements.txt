@@ -1,5 +1,5 @@
-watchdog~=3.0.0
+pyperclip~=1.9.0
 
-requests~=2.31.0
+requests~=2.32.3
 
-pyperclip~=1.8.2
+watchdog~=5.0.3
