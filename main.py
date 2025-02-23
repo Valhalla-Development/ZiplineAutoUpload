@@ -23,7 +23,10 @@ MAX_FILE_SIZE_MB: int = 40
 # A dictionary containing upload options for the Zipline API.
 # For detailed information on available options, refer to the official documentation:
 # https://zipline.diced.sh/docs/guides/upload-options
-UPLOAD_OPTIONS: Dict[str, str] = {"Format": "RANDOM", "Embed": "false"}
+UPLOAD_OPTIONS: Dict[str, str] = {
+    "x-zipline-format": "random", 
+    "x-zipline-original-name": "false"
+}
 # Used to decide if the URL for the uploaded files should open in the browser.
 OPEN_URL_IN_BROWSER: bool = False
 
