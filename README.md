@@ -3,6 +3,14 @@
   <p>
     <img src="https://share.valhalladev.org/r/XPk8iq.png" width="550" alt="DiscordGPT" />
   </p>
+  
+  <p>
+    <strong>⚠️ Important Version Notice ⚠️</strong><br>
+    This branch is compatible with Zipline v3 and will remain available for legacy support.<br>
+    For Zipline v4 support, please use the main branch.<br>
+    No further updates will be made to this v3 branch.
+  </p>
+  
   <br />
   <p>
   <a href="https://discord.gg/Q3ZhdRJ">
