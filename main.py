@@ -118,7 +118,8 @@ class MonitorFolder(FileSystemEventHandler):
                 response = requests.post(API_UPLOAD_URL, headers=headers, files=files, timeout=10)
 
             response.raise_for_status()  # Raise an exception for bad responses
-            file_url = response.json()["files"][0]
+            response_data = response.json()["files"][0]
+            file_url = response_data["url"]
             print(f"File uploaded successfully: {file_url}")
             pyperclip.copy(file_url)  # Copy the URL to clipboard
 
