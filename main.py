@@ -1,6 +1,8 @@
 """Watch a folder and upload new images/videos to a Zipline instance.
 """
 
+import logging
+import sys
 import webbrowser
 from collections import OrderedDict
 from mimetypes import guess_type
@@ -39,6 +41,86 @@ UPLOAD_OPTIONS: Dict[str, str] = {
 
 ENV_PATH = join(dirname(__file__), ".env")
 load_dotenv(ENV_PATH)  # no-op if missing; _require() is what fails
+
+log = logging.getLogger("zipline")
+
+_RESET = "\033[0m"
+_BOLD = "\033[1m"
+_GRAY = "\033[38;5;244m"
+_VIOLET = "\033[38;2;167;139;250m"
+_CYAN = "\033[38;2;103;232;249m"
+_GREEN = "\033[38;2;52;211;153m"
+_AMBER = "\033[38;2;251;191;36m"
+_ROSE = "\033[38;2;251;113;133m"
+_BLUE = "\033[38;2;147;197;253m"
+
+_LEVEL_STYLE = {
+    logging.DEBUG: (_BLUE, "DEBUG"),
+    logging.INFO: (_GREEN, " INFO"),
+    logging.WARNING: (_AMBER, " WARN"),
+    logging.ERROR: (_ROSE, "ERROR"),
+    logging.CRITICAL: (_ROSE, "ERROR"),
+}
+
+
+def _use_color() -> bool:
+    explicit = (getenv("LOG_COLOR") or "").strip().lower()
+    if explicit in {"1", "true", "yes", "on"}:
+        return True
+    if explicit in {"0", "false", "no", "off"}:
+        return False
+    if getenv("NO_COLOR"):
+        return False
+    return sys.stdout.isatty()
+
+
+def _paint(text: str, code: str = "", bold: bool = False) -> str:
+    if not _use_color():
+        return text
+    return f"{_BOLD if bold else ''}{code}{text}{_RESET}"
+
+
+def _gradient_rule(width: int = 52) -> str:
+    if not _use_color():
+        return "━" * width
+    chunks = []
+    for i in range(width):
+        t = i / max(width - 1, 1)
+        r = int(139 + (34 - 139) * t)
+        g = int(92 + (211 - 92) * t)
+        b = int(246 + (238 - 246) * t)
+        chunks.append(f"\033[38;2;{r};{g};{b}m━")
+    return "".join(chunks) + _RESET
+
+
+class _ColorFormatter(logging.Formatter):
+    def format(self, record: logging.LogRecord) -> str:
+        time = self.formatTime(record, self.datefmt)
+        code, label = _LEVEL_STYLE.get(record.levelno, (_GRAY, record.levelname))
+        return f"{_paint(time, _GRAY)} {_paint(label, code, bold=True)}  {record.getMessage()}"
+
+
+def _setup_logging() -> None:
+    level_name = (getenv("LOG_LEVEL") or "INFO").strip().upper()
+    level = getattr(logging, level_name, None)
+    if not isinstance(level, int):
+        level = logging.INFO
+
+    plain = logging.Formatter("%(asctime)s %(levelname)s  %(message)s", datefmt="%H:%M:%S")
+    stream = logging.StreamHandler(sys.stdout)
+    stream.setFormatter(_ColorFormatter(datefmt="%H:%M:%S") if _use_color() else plain)
+
+    handlers: List[logging.Handler] = [stream]
+    log_file = (getenv("LOG_FILE") or "").strip()
+    if log_file:
+        file_handler = logging.FileHandler(log_file)
+        file_handler.setFormatter(plain)
+        handlers.append(file_handler)
+
+    logging.basicConfig(level=level, handlers=handlers, force=True)
+
+
+_setup_logging()
 
 
 class ConfigError(SystemExit):
@@ -85,21 +167,31 @@ OPEN_URL_IN_BROWSER: bool = _truthy("OPEN_URL_IN_BROWSER", default=False)
 def print_banner() -> None:
     host = urlparse(API_UPLOAD_URL).netloc or API_UPLOAD_URL
     types = ", ".join(ext.lstrip(".") for ext in VALID_EXTENSIONS)
-    browser = "true" if OPEN_URL_IN_BROWSER else "false"
-    line = "─" * 52
-    print(
-        f"\n{line}\n"
-        f"  ZiplineAutoUpload\n"
-        f"{line}\n"
-        f"  folder    {MONITOR_FOLDER_PATH}\n"
-        f"  host      {host}\n"
-        f"  token     {_mask(USER_ACCESS_TOKEN)}\n"
-        f"  types     {types}\n"
-        f"  max size  {MAX_FILE_SIZE_MB} MB\n"
-        f"  browser   {browser}\n"
-        f"{line}\n"
-        f"  watching…  (ctrl+c to stop)\n"
+    rule = _gradient_rule()
+    config_source = ".env loaded" if exists(ENV_PATH) else "defaults (no .env — copy .env.example)"
+    browser = (
+        _paint("enabled", _GREEN) if OPEN_URL_IN_BROWSER else _paint("disabled", _AMBER)
     )
+
+    def row(label: str, value: str) -> None:
+        print(f"  {_paint(f'{label:<12}', _GRAY)} {value}")
+
+    print()
+    print(f"  {_paint('ZIPLINE', _VIOLET, bold=True)} {_paint('auto-upload', _GRAY)}")
+    print(f"  {rule}")
+    row("Folder", MONITOR_FOLDER_PATH)
+    row("Host", _paint(host, _CYAN))
+    row("Token", _mask(USER_ACCESS_TOKEN))
+    row("Types", types)
+    row("Limit", f"{MAX_FILE_SIZE_MB} MB")
+    row("Browser", browser)
+    row("Config", config_source)
+    print(f"  {rule}")
+    print(
+        f"  {_paint('Ready to upload.', _GREEN, bold=True)} "
+        f"{_paint('Ctrl+C to stop · LOG_LEVEL=DEBUG for more detail', _GRAY)}"
+    )
+    print()
 
 
 def validate_file(path: str) -> bool:
@@ -109,14 +201,14 @@ def validate_file(path: str) -> bool:
         return False
 
     if splitext(path)[1].lower() not in VALID_EXTENSIONS_SET:
-        print(f"Error: {basename(path)} has an unsupported file extension. "
-              f"Allowed extensions: {', '.join(VALID_EXTENSIONS)}")
+        log.warning("%s: unsupported extension (want %s)",
+                    basename(path), ", ".join(VALID_EXTENSIONS))
         return False
 
     # 1 << 20 == 1 MiB. `>=` means exactly MAX_FILE_SIZE_MB is also rejected.
     if getsize(path) >= MAX_FILE_SIZE_MB * (1 << 20):
-        print(f"Error: {basename(path)} exceeds the permitted file size limit "
-              f"({getsize(path) / (1 << 20):.2f}MB > {MAX_FILE_SIZE_MB}MB).")
+        log.warning("%s: %.2f MB exceeds %s MB limit",
+                    basename(path), getsize(path) / (1 << 20), MAX_FILE_SIZE_MB)
         return False
 
     return True
@@ -141,6 +233,8 @@ def wait_until_stable(path: str) -> bool:
         elif now - last_change >= STABLE_QUIET_S:
             return True
         sleep(0.05)  # keep this well under STABLE_QUIET_S
+    log.warning("%s never settled (still growing, vanished, or hit %ss)",
+                basename(path), int(STABLE_TIMEOUT_S))
     return False
 
 
@@ -165,22 +259,22 @@ def _file_url(response: requests.Response):
     try:
         data = response.json()
     except ValueError:
-        print(f"Upload got non-JSON ({response.status_code}): {_body_snippet(response)}")
+        log.error("upload got non-JSON (%s): %s", response.status_code, _body_snippet(response))
         return None
     files = data.get("files") if isinstance(data, dict) else None
     if not isinstance(files, list) or not files:
-        print(f"Unexpected upload response ({response.status_code}): {_body_snippet(response)}")
+        log.error("unexpected upload response (%s): %s", response.status_code, _body_snippet(response))
         return None
     first = files[0]
     url = first.get("url") if isinstance(first, dict) else None
     if not url:
-        print(f"Upload response had no file URL: {_body_snippet(response)}")
+        log.error("upload response had no file URL: %s", _body_snippet(response))
         return None
     return url
 
 
 def _mime_type(path: str) -> str:
-    # guess_type returns None for unknown extensions; Zipline still wants a Content-Type.
+    # guess_type returns None for unknown extensions
     return guess_type(path)[0] or "application/octet-stream"
 
 
@@ -272,45 +366,49 @@ class MonitorFolder(FileSystemEventHandler):
                         timeout=timeout,
                     )
             except PermissionError as e:
-                print(f"Permission error: {e}")
+                log.error("permission error reading %s: %s", basename(path), e)
                 return
             except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
                 last_error = str(e)
             except requests.exceptions.RequestException as e:
-                print(f"File upload failed: {e}")
+                log.error("upload failed: %s", e)
                 return
             else:
                 if response.status_code in (401, 403):
-                    print(
-                        f"Zipline rejected the token (HTTP {response.status_code}). "
-                        f"Check ZIPLINE_TOKEN in .env."
+                    log.error(
+                        "Zipline rejected the token (HTTP %s). Check ZIPLINE_TOKEN in .env. %s",
+                        response.status_code,
+                        _body_snippet(response),
                     )
-                    print(f"  {_body_snippet(response)}")
                     return
                 if response.status_code in RETRY_STATUSES:
                     last_error = f"HTTP {response.status_code} {_body_snippet(response)}"
                 elif not response.ok:
-                    print(f"File upload failed: HTTP {response.status_code} {_body_snippet(response)}")
+                    log.error("upload failed: HTTP %s %s", response.status_code, _body_snippet(response))
                     return
                 else:
                     file_url = _file_url(response)
                     if not file_url:
                         return
-                    print(f"File uploaded successfully: {file_url}")
+                    try:
+                        size_mb = getsize(path) / (1 << 20)
+                    except OSError:
+                        size_mb = 0.0
+                    log.info("uploaded %s (%.2f MB) -> %s", basename(path), size_mb, file_url)
                     try:
                         pyperclip.copy(file_url)
                     except pyperclip.PyperclipException as e:
-                        print(f"Uploaded, but clipboard copy failed: {e}")
+                        log.warning("uploaded, but clipboard copy failed: %s", e)
                     if OPEN_URL_IN_BROWSER:
                         webbrowser.open(file_url)
                     return
 
             if attempt < UPLOAD_ATTEMPTS:
                 delay = 2 ** (attempt - 1)  # 1s, then 2s
-                print(f"Upload retry {attempt}/{UPLOAD_ATTEMPTS} in {delay}s: {last_error}")
+                log.warning("retry %s/%s in %ss: %s", attempt, UPLOAD_ATTEMPTS, delay, last_error)
                 sleep(delay)
 
-        print(f"File upload failed after {UPLOAD_ATTEMPTS} attempts: {last_error}")
+        log.error("upload failed after %s attempts: %s", UPLOAD_ATTEMPTS, last_error)
 
     def on_any_event(self, event):
         if event.event_type not in ["created", "modified"]:
@@ -320,6 +418,7 @@ class MonitorFolder(FileSystemEventHandler):
         path = event.src_path
         if not self._interesting(path):
             return
+        log.debug("%s %s", event.event_type, basename(path))
         self._schedule(path)
 
 
@@ -341,6 +440,7 @@ def main():
         while True:
             sleep(1)  # watchdog runs on its own thread; this just keeps us alive
     except KeyboardInterrupt:
+        log.info("stopped")
         event_handler.stop()
         observer.stop()
         observer.join()

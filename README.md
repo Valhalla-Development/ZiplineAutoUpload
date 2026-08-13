@@ -85,6 +85,8 @@ MONITOR_FOLDER_PATH=/absolute/path/to/your/folder
 ZIPLINE_UPLOAD_URL=https://your.zipline.instance/api/upload
 ZIPLINE_TOKEN=your_access_token_here
 OPEN_URL_IN_BROWSER=false
+LOG_LEVEL=INFO
+LOG_FILE=
 ```
 
 ## 🎬 Usage
@@ -105,19 +107,19 @@ OPEN_URL_IN_BROWSER=false
 
 When running, you'll see:
 ```
-────────────────────────────────────────────────────
-  ZiplineAutoUpload
-────────────────────────────────────────────────────
-  folder    /absolute/path/to/your/folder
-  host      your.zipline.instance
-  token     ••••here
-  types     png, jpg, jpeg, mov
-  max size  40 MB
-  browser   no
-────────────────────────────────────────────────────
-  watching…  (ctrl+c to stop)
+  ZIPLINE  auto-upload
+  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  Folder       /absolute/path/to/your/folder
+  Host         your.zipline.instance
+  Token        ••••here
+  Types        png, jpg, jpeg, mov
+  Limit        40 MB
+  Browser      disabled
+  Config       .env loaded
+  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  Ready to upload.  Ctrl+C to stop · LOG_LEVEL=DEBUG for more detail
 
-File uploaded successfully: https://your.zipline.instance/u/filename.png
+14:05:01  INFO  uploaded screenshot.png (0.42 MB) -> https://your.zipline.instance/u/filename.png
 ```
 
 ## 🤝 Contributing
