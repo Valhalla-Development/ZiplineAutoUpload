@@ -2,7 +2,7 @@ import webbrowser
 from mimetypes import guess_type
 from os import getenv
 from os.path import basename, dirname, exists, getsize, isfile, join, splitext
-from time import sleep
+from time import monotonic, sleep
 from typing import Dict, List
 from urllib.parse import urlparse
 
@@ -14,6 +14,8 @@ from watchdog.observers import Observer
 
 VALID_EXTENSIONS: List[str] = [".png", ".jpg", ".jpeg", ".mov"]
 MAX_FILE_SIZE_MB: int = 40
+STABLE_QUIET_S: float = 0.4
+STABLE_TIMEOUT_S: float = 120
 # https://zipline.diced.sh/docs/guides/upload-options
 UPLOAD_OPTIONS: Dict[str, str] = {
     "x-zipline-format": "random",
@@ -112,6 +114,27 @@ def validate_file(path: str) -> bool:
     return True
 
 
+def wait_until_stable(path: str) -> bool:
+    deadline = monotonic() + STABLE_TIMEOUT_S
+    last_size = -1
+    last_change = monotonic()
+    while monotonic() < deadline:
+        if not isfile(path):
+            return False
+        try:
+            size = getsize(path)
+        except OSError:
+            return False
+        now = monotonic()
+        if size != last_size:
+            last_size = size
+            last_change = now
+        elif now - last_change >= STABLE_QUIET_S:
+            return True
+        sleep(0.05)
+    return False
+
+
 class MonitorFolder(FileSystemEventHandler):
     def __init__(self):
         self.array: List[Dict[str, str]] = []  # Store processed files
@@ -190,16 +213,22 @@ class MonitorFolder(FileSystemEventHandler):
             event (FileSystemEvent): The event object representing the file event.
         """
         if event.event_type not in ['created', 'modified']:
-            return  # Ignore events other than file creation or modification
+            return
+
+        if event.is_directory:
+            return
 
         if not validate_file(event.src_path):
-            return  # Skip invalid files
+            return
+
+        if not wait_until_stable(event.src_path):
+            return
+
+        if not validate_file(event.src_path):
+            return
 
         self.array.append({'file': event.src_path, 'status': 'processing'})
-
-        sleep(0.02)  # Small delay to allow for system events
-
-        self.upload_file(event)  # Attempt to upload the file
+        self.upload_file(event)
 
 
 def main():
