@@ -6,7 +6,8 @@ from collections import OrderedDict
 from mimetypes import guess_type
 from os import getenv
 from os.path import basename, dirname, exists, getsize, isfile, join, splitext
-from threading import Lock, Timer
+from queue import Queue
+from threading import Event, Lock, Thread, Timer
 from time import monotonic, sleep
 from typing import Dict, List
 from urllib.parse import urlparse
@@ -25,6 +26,9 @@ MAX_FILE_SIZE_MB: int = 40
 STABLE_QUIET_S: float = 0.4
 STABLE_TIMEOUT_S: float = 120  # long screen recordings
 RECENT_COOLDOWN_S: float = 2.0  # Finder/Spotlight often touch the file again after save
+UPLOAD_TIMEOUT_FLOOR_S: float = 30.0
+# Worst-case uplink for timeout math (~2 Mbit/s). A 40MB .mov lands around 3 min.
+UPLOAD_BYTES_PER_S: float = 256 * 1024
 
 # https://zipline.diced.sh/docs/guides/upload-options
 UPLOAD_OPTIONS: Dict[str, str] = {
@@ -139,17 +143,33 @@ def wait_until_stable(path: str) -> bool:
     return False
 
 
+def upload_timeout_s(path: str) -> float:
+    """HTTP timeout from file size so a 40MB .mov isn't killed at 10s."""
+    try:
+        size = getsize(path)
+    except OSError:
+        return UPLOAD_TIMEOUT_FLOOR_S
+    return max(UPLOAD_TIMEOUT_FLOOR_S, size / UPLOAD_BYTES_PER_S + 15.0)
+
+
 class MonitorFolder(FileSystemEventHandler):
     def __init__(self):
         self._lock = Lock()
         self._pending: Dict[str, Timer] = {}  # path -> coalescing timer
         self._recent: OrderedDict[str, float] = OrderedDict()  # path -> last upload time
+        self._queue: Queue = Queue()
+        self._stop = Event()
+        self._worker = Thread(target=self._run_worker, name="upload-worker", daemon=True)
+        self._worker.start()
 
     def stop(self) -> None:
         with self._lock:
             for timer in self._pending.values():
                 timer.cancel()
             self._pending.clear()
+        self._stop.set()
+        self._queue.put(None)  # wake the worker
+        self._worker.join(timeout=8)
 
     def _interesting(self, path: str) -> bool:
         """Cheap pre-filter so we don't arm a timer for every Desktop file."""
@@ -185,7 +205,18 @@ class MonitorFolder(FileSystemEventHandler):
             self._recent.move_to_end(path)
             while len(self._recent) > 32:
                 self._recent.popitem(last=False)
-        self.upload_file(path)
+        self._queue.put(path)
+
+    def _run_worker(self) -> None:
+        # One POST at a time so two .movs don't fight for the uplink.
+        while not self._stop.is_set():
+            path = self._queue.get()
+            if path is None:
+                break
+            try:
+                self.upload_file(path)
+            finally:
+                self._queue.task_done()
 
     def upload_file(self, path: str):
         headers = {"Authorization": USER_ACCESS_TOKEN, **UPLOAD_OPTIONS}
@@ -198,7 +229,13 @@ class MonitorFolder(FileSystemEventHandler):
                         guess_type(path)[0],
                     )
                 }
-                response = requests.post(API_UPLOAD_URL, headers=headers, files=files, timeout=10)
+                # Size-based; a 40MB file on a slow link needs minutes, not 10s.
+                response = requests.post(
+                    API_UPLOAD_URL,
+                    headers=headers,
+                    files=files,
+                    timeout=upload_timeout_s(path),
+                )
 
             response.raise_for_status()
             response_data = response.json()["files"][0]
