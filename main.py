@@ -1,34 +1,86 @@
 import webbrowser
 from mimetypes import guess_type
-from os.path import basename, isfile, splitext, getsize, exists
+from os import getenv
+from os.path import basename, dirname, exists, getsize, isfile, join, splitext
 from time import sleep
-from typing import List, Dict
+from typing import Dict, List
+from urllib.parse import urlparse
 
 import pyperclip
 import requests
+from dotenv import load_dotenv
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
-# Configuration
-# Absolute path to the folder to monitor for new files
-MONITOR_FOLDER_PATH: str = "<path>"
-# List of valid file extensions that will be considered for upload
 VALID_EXTENSIONS: List[str] = [".png", ".jpg", ".jpeg", ".mov"]
-# The URL of the API endpoint for uploading files to your Zipline instance
-API_UPLOAD_URL: str = "https://<domain>/api/upload"
-# The access token associated with your user account for authentication
-USER_ACCESS_TOKEN: str = "<access_token>"
-# The maximum allowable size for an individual file, specified in megabytes
 MAX_FILE_SIZE_MB: int = 40
-# A dictionary containing upload options for the Zipline API.
-# For detailed information on available options, refer to the official documentation:
 # https://zipline.diced.sh/docs/guides/upload-options
 UPLOAD_OPTIONS: Dict[str, str] = {
-    "x-zipline-format": "random", 
-    "x-zipline-original-name": "false"
+    "x-zipline-format": "random",
+    "x-zipline-original-name": "false",
 }
-# Used to decide if the URL for the uploaded files should open in the browser.
-OPEN_URL_IN_BROWSER: bool = False
+
+ENV_PATH = join(dirname(__file__), ".env")
+load_dotenv(ENV_PATH)
+
+
+class ConfigError(SystemExit):
+    """Raised when .env is missing or still full of placeholders."""
+
+
+def _require(name: str) -> str:
+    raw = getenv(name)
+    if raw is None:
+        raise ConfigError(
+            f"\n  {name} is not set.\n"
+            f"  Copy .env.example to .env and fill it in — that's the whole setup.\n"
+        )
+    value = raw.strip()
+    if not value or value.startswith("<") or value.lower() in {"changeme", "your_access_token_here"}:
+        raise ConfigError(
+            f"\n  {name} still looks like a placeholder ({value!r}).\n"
+            f"  Open .env and put the real value in. No quotes needed.\n"
+        )
+    return value
+
+
+def _truthy(name: str, default: bool = False) -> bool:
+    raw = getenv(name)
+    if raw is None or not raw.strip():
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _mask(secret: str) -> str:
+    if len(secret) <= 8:
+        return "••••"
+    return f"••••{secret[-4:]}"
+
+
+MONITOR_FOLDER_PATH: str = _require("MONITOR_FOLDER_PATH")
+API_UPLOAD_URL: str = _require("ZIPLINE_UPLOAD_URL")
+USER_ACCESS_TOKEN: str = _require("ZIPLINE_TOKEN")
+OPEN_URL_IN_BROWSER: bool = _truthy("OPEN_URL_IN_BROWSER", default=False)
+
+
+def print_banner() -> None:
+    host = urlparse(API_UPLOAD_URL).netloc or API_UPLOAD_URL
+    types = ", ".join(ext.lstrip(".") for ext in VALID_EXTENSIONS)
+    browser = "true" if OPEN_URL_IN_BROWSER else "false"
+    line = "─" * 52
+    print(
+        f"\n{line}\n"
+        f"  ZiplineAutoUpload\n"
+        f"{line}\n"
+        f"  folder    {MONITOR_FOLDER_PATH}\n"
+        f"  host      {host}\n"
+        f"  token     {_mask(USER_ACCESS_TOKEN)}\n"
+        f"  types     {types}\n"
+        f"  max size  {MAX_FILE_SIZE_MB} MB\n"
+        f"  browser   {browser}\n"
+        f"{line}\n"
+        f"  watching…  (ctrl+c to stop)\n"
+    )
 
 
 def validate_file(path: str) -> bool:
@@ -155,12 +207,16 @@ def main():
     Main function to set up and run the file monitoring system.
     """
     if not exists(MONITOR_FOLDER_PATH):
-        raise FileNotFoundError(f"The specified path does not exist: {MONITOR_FOLDER_PATH}")
+        raise ConfigError(
+            f"\n  MONITOR_FOLDER_PATH does not exist: {MONITOR_FOLDER_PATH}\n"
+            f"  Fix the path in .env and try again.\n"
+        )
+
+    print_banner()
 
     event_handler = MonitorFolder()
     observer = Observer()
     observer.schedule(event_handler, path=MONITOR_FOLDER_PATH, recursive=True)
-    print("Monitoring started")
     observer.start()
 
     try:
