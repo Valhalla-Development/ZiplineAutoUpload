@@ -1,7 +1,7 @@
 pyperclip~=1.11.0
 
-python-dotenv~=1.2.1
+python-dotenv~=1.2.2
 
-requests~=2.32.5
+requests~=2.34.2
 
 watchdog~=6.0.0

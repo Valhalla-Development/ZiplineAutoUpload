@@ -50,7 +50,7 @@ ZiplineAutoUpload is your personal file-sharing assistant that makes sharing fil
 
 ## 🚀 Requirements
 
-- [Python 3.x](https://python.org/)
+- [Python 3.10+](https://python.org/)
 - [pip](https://pip.pypa.io/en/stable/installation/) (Python package installer)
 - A [Zipline](https://github.com/diced/zipline) instance
 - Internet connection (obviously! 😉)
