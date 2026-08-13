@@ -11,7 +11,6 @@ from os.path import basename, dirname, exists, getsize, isfile, join, splitext
 from queue import Queue
 from threading import Event, Lock, Thread, Timer
 from time import monotonic, sleep
-from typing import Dict, List
 from urllib.parse import urlparse
 
 import pyperclip
@@ -20,7 +19,7 @@ from dotenv import load_dotenv
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
-VALID_EXTENSIONS: List[str] = [".png", ".jpg", ".jpeg", ".mov"]
+VALID_EXTENSIONS: list[str] = [".png", ".jpg", ".jpeg", ".mov"]
 VALID_EXTENSIONS_SET = {ext.lower() for ext in VALID_EXTENSIONS}  # .PNG, .Mov, etc.
 MAX_FILE_SIZE_MB: int = 40
 
@@ -34,7 +33,7 @@ UPLOAD_ATTEMPTS: int = 3
 RETRY_STATUSES = {429, 500, 502, 503, 504}
 
 # https://zipline.diced.sh/docs/guides/upload-options
-UPLOAD_OPTIONS: Dict[str, str] = {
+UPLOAD_OPTIONS: dict[str, str] = {
     "x-zipline-format": "random",
     "x-zipline-original-name": "false",
 }
@@ -110,7 +109,7 @@ def _setup_logging() -> None:
     stream = logging.StreamHandler(sys.stdout)
     stream.setFormatter(_ColorFormatter(datefmt="%H:%M:%S") if _use_color() else plain)
 
-    handlers: List[logging.Handler] = [stream]
+    handlers: list[logging.Handler] = [stream]
     log_file = (getenv("LOG_FILE") or "").strip()
     if log_file:
         file_handler = logging.FileHandler(log_file)
@@ -281,7 +280,7 @@ def _mime_type(path: str) -> str:
 class MonitorFolder(FileSystemEventHandler):
     def __init__(self):
         self._lock = Lock()
-        self._pending: Dict[str, Timer] = {}  # path -> coalescing timer
+        self._pending: dict[str, Timer] = {}  # path -> coalescing timer
         self._recent: OrderedDict[str, float] = OrderedDict()  # path -> last upload time
         self._queue: Queue = Queue()
         self._stop = Event()
