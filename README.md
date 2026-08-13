@@ -74,17 +74,17 @@ ZiplineAutoUpload is your personal file-sharing assistant that makes sharing fil
 
 ## ⚙️ Configuration
 
-See the top of `main.py` for all configuration options and their descriptions. The main settings you'll need to configure are:
+Copy the example env file, then drop in your folder, Zipline URL, and token:
 
-```python
-# The folder to monitor for new files
-MONITOR_FOLDER_PATH = "/path/to/your/folder"
+```bash
+cp .env.example .env
+```
 
-# Your Zipline instance URL
-API_UPLOAD_URL = "https://your.zipline.instance/api/upload"
-
-# Your Zipline access token
-USER_ACCESS_TOKEN = "your_access_token_here"
+```env
+MONITOR_FOLDER_PATH=/absolute/path/to/your/folder
+ZIPLINE_UPLOAD_URL=https://your.zipline.instance/api/upload
+ZIPLINE_TOKEN=your_access_token_here
+OPEN_URL_IN_BROWSER=false
 ```
 
 ## 🎬 Usage
@@ -105,7 +105,18 @@ USER_ACCESS_TOKEN = "your_access_token_here"
 
 When running, you'll see:
 ```
-Monitoring started
+────────────────────────────────────────────────────
+  ZiplineAutoUpload
+────────────────────────────────────────────────────
+  folder    /absolute/path/to/your/folder
+  host      your.zipline.instance
+  token     ••••here
+  types     png, jpg, jpeg, mov
+  max size  40 MB
+  browser   no
+────────────────────────────────────────────────────
+  watching…  (ctrl+c to stop)
+
 File uploaded successfully: https://your.zipline.instance/u/filename.png
 ```
 
