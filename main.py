@@ -179,6 +179,11 @@ def _file_url(response: requests.Response):
     return url
 
 
+def _mime_type(path: str) -> str:
+    # guess_type returns None for unknown extensions; Zipline still wants a Content-Type.
+    return guess_type(path)[0] or "application/octet-stream"
+
+
 class MonitorFolder(FileSystemEventHandler):
     def __init__(self):
         self._lock = Lock()
@@ -257,7 +262,7 @@ class MonitorFolder(FileSystemEventHandler):
                         "file": (
                             basename(path),
                             file,
-                            guess_type(path)[0],
+                            _mime_type(path),
                         )
                     }
                     response = requests.post(
@@ -292,7 +297,10 @@ class MonitorFolder(FileSystemEventHandler):
                     if not file_url:
                         return
                     print(f"File uploaded successfully: {file_url}")
-                    pyperclip.copy(file_url)
+                    try:
+                        pyperclip.copy(file_url)
+                    except pyperclip.PyperclipException as e:
+                        print(f"Uploaded, but clipboard copy failed: {e}")
                     if OPEN_URL_IN_BROWSER:
                         webbrowser.open(file_url)
                     return
