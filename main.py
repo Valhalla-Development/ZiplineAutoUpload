@@ -27,8 +27,9 @@ STABLE_QUIET_S: float = 0.4
 STABLE_TIMEOUT_S: float = 120  # long screen recordings
 RECENT_COOLDOWN_S: float = 2.0  # Finder/Spotlight often touch the file again after save
 UPLOAD_TIMEOUT_FLOOR_S: float = 30.0
-# Worst-case uplink for timeout math (~2 Mbit/s). A 40MB .mov lands around 3 min.
 UPLOAD_BYTES_PER_S: float = 256 * 1024
+UPLOAD_ATTEMPTS: int = 3
+RETRY_STATUSES = {429, 500, 502, 503, 504}
 
 # https://zipline.diced.sh/docs/guides/upload-options
 UPLOAD_OPTIONS: Dict[str, str] = {
@@ -152,6 +153,32 @@ def upload_timeout_s(path: str) -> float:
     return max(UPLOAD_TIMEOUT_FLOOR_S, size / UPLOAD_BYTES_PER_S + 15.0)
 
 
+def _body_snippet(response: requests.Response) -> str:
+    text = (response.text or "").strip().replace("\n", " ")
+    if len(text) > 300:
+        text = text[:297] + "..."
+    return text or "(empty body)"
+
+
+def _file_url(response: requests.Response):
+    """Pull files[0].url out of a Zipline upload JSON, or None if the shape is wrong."""
+    try:
+        data = response.json()
+    except ValueError:
+        print(f"Upload got non-JSON ({response.status_code}): {_body_snippet(response)}")
+        return None
+    files = data.get("files") if isinstance(data, dict) else None
+    if not isinstance(files, list) or not files:
+        print(f"Unexpected upload response ({response.status_code}): {_body_snippet(response)}")
+        return None
+    first = files[0]
+    url = first.get("url") if isinstance(first, dict) else None
+    if not url:
+        print(f"Upload response had no file URL: {_body_snippet(response)}")
+        return None
+    return url
+
+
 class MonitorFolder(FileSystemEventHandler):
     def __init__(self):
         self._lock = Lock()
@@ -208,7 +235,6 @@ class MonitorFolder(FileSystemEventHandler):
         self._queue.put(path)
 
     def _run_worker(self) -> None:
-        # One POST at a time so two .movs don't fight for the uplink.
         while not self._stop.is_set():
             path = self._queue.get()
             if path is None:
@@ -219,36 +245,64 @@ class MonitorFolder(FileSystemEventHandler):
                 self._queue.task_done()
 
     def upload_file(self, path: str):
+        # Raw token, not "Bearer …" — this Zipline version expects it that way.
         headers = {"Authorization": USER_ACCESS_TOKEN, **UPLOAD_OPTIONS}
-        try:
-            with open(path, "rb") as file:
-                files = {
-                    "file": (
-                        basename(path),
-                        file,
-                        guess_type(path)[0],
+        timeout = upload_timeout_s(path)
+        last_error = None
+
+        for attempt in range(1, UPLOAD_ATTEMPTS + 1):
+            try:
+                with open(path, "rb") as file:
+                    files = {
+                        "file": (
+                            basename(path),
+                            file,
+                            guess_type(path)[0],
+                        )
+                    }
+                    response = requests.post(
+                        API_UPLOAD_URL,
+                        headers=headers,
+                        files=files,
+                        timeout=timeout,
                     )
-                }
-                # Size-based; a 40MB file on a slow link needs minutes, not 10s.
-                response = requests.post(
-                    API_UPLOAD_URL,
-                    headers=headers,
-                    files=files,
-                    timeout=upload_timeout_s(path),
-                )
+            except PermissionError as e:
+                print(f"Permission error: {e}")
+                return
+            except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+                last_error = str(e)
+            except requests.exceptions.RequestException as e:
+                print(f"File upload failed: {e}")
+                return
+            else:
+                if response.status_code in (401, 403):
+                    print(
+                        f"Zipline rejected the token (HTTP {response.status_code}). "
+                        f"Check ZIPLINE_TOKEN in .env."
+                    )
+                    print(f"  {_body_snippet(response)}")
+                    return
+                if response.status_code in RETRY_STATUSES:
+                    last_error = f"HTTP {response.status_code} {_body_snippet(response)}"
+                elif not response.ok:
+                    print(f"File upload failed: HTTP {response.status_code} {_body_snippet(response)}")
+                    return
+                else:
+                    file_url = _file_url(response)
+                    if not file_url:
+                        return
+                    print(f"File uploaded successfully: {file_url}")
+                    pyperclip.copy(file_url)
+                    if OPEN_URL_IN_BROWSER:
+                        webbrowser.open(file_url)
+                    return
 
-            response.raise_for_status()
-            response_data = response.json()["files"][0]
-            file_url = response_data["url"]
-            print(f"File uploaded successfully: {file_url}")
-            pyperclip.copy(file_url)
+            if attempt < UPLOAD_ATTEMPTS:
+                delay = 2 ** (attempt - 1)  # 1s, then 2s
+                print(f"Upload retry {attempt}/{UPLOAD_ATTEMPTS} in {delay}s: {last_error}")
+                sleep(delay)
 
-            if OPEN_URL_IN_BROWSER:
-                webbrowser.open(file_url)
-        except requests.exceptions.RequestException as e:
-            print(f"File upload failed: {str(e)}")
-        except PermissionError as e:
-            print(f"Permission error: {str(e)}")
+        print(f"File upload failed after {UPLOAD_ATTEMPTS} attempts: {last_error}")
 
     def on_any_event(self, event):
         if event.event_type not in ["created", "modified"]:
