@@ -1,7 +1,26 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "zipline-auto-upload"
 version = "1.2.1"
+description = "Watch a folder and upload new images/videos to a Zipline instance."
+readme = "README.md"
+license = { file = "LICENSE" }
 requires-python = ">=3.10"
+dependencies = [
+    "pyperclip~=1.11.0",
+    "python-dotenv~=1.2.2",
+    "requests~=2.34.2",
+    "watchdog~=6.0.0",
+]
+
+[project.scripts]
+zipline-auto-upload = "main:main"
+
+[tool.setuptools]
+py-modules = ["main"]
 
 [tool.ruff]
 target-version = "py310"

@@ -39,7 +39,8 @@ UPLOAD_OPTIONS: dict[str, str] = {
 }
 
 ENV_PATH = join(dirname(__file__), ".env")
-load_dotenv(ENV_PATH)  # no-op if missing; _require() is what fails
+load_dotenv(ENV_PATH)  # checkout: .env next to main.py
+load_dotenv()          # installed script: .env in the current directory
 
 log = logging.getLogger("zipline")
 
