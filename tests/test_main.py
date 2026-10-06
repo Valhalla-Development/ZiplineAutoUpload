@@ -111,6 +111,23 @@ class UploadTests(TestCase):
         self.post.assert_called_once()
         self.clipboard.assert_not_called()
 
+    def test_clipboard_failure_does_not_repeat_successful_upload(self):
+        self.post.return_value = self.response()
+        self.clipboard.side_effect = main.pyperclip.PyperclipException("clipboard unavailable")
+        monitor = self.monitor()
+        monitor._process(str(self.path))
+        self.drain(monitor)
+        monitor._process(str(self.path))
+        self.drain(monitor)
+        self.post.assert_called_once()
+
+    def test_permission_error_is_reported_without_post(self):
+        monitor = self.monitor()
+        with patch("builtins.open", side_effect=PermissionError("access denied")):
+            self.assertFalse(monitor.upload_file(str(self.path)))
+        self.post.assert_not_called()
+        self.log.error.assert_called_once()
+
     def test_duplicate_paths_are_not_queued_while_active(self):
         monitor = self.monitor()
         started, release = Event(), Event()
@@ -316,6 +333,33 @@ class StabilityTests(TestCase):
         stop = Event()
         stop.set()
         self.assertFalse(main.wait_until_stable("image.png", stop))
+
+
+class LifecycleTests(TestCase):
+    def setUp(self):
+        self.start_patch(patch.object(main, "isdir", return_value=True))
+        self.start_patch(patch.object(main, "print_banner"))
+        self.start_patch(patch.object(main, "log"))
+        self.observer = self.start_patch(patch.object(main, "Observer")).return_value
+        self.monitor = self.start_patch(patch.object(main, "MonitorFolder")).return_value
+
+    def test_monitor_stops_even_if_observer_start_fails(self):
+        self.observer.start.side_effect = OSError("cannot watch directory")
+        self.observer.is_alive.return_value = False
+        with self.assertRaises(OSError):
+            main.main()
+        self.observer.stop.assert_called_once()
+        self.monitor.stop.assert_called_once()
+
+    def test_shutdown_stops_observer_before_upload_worker(self):
+        calls = Mock()
+        calls.attach_mock(self.observer, "observer")
+        calls.attach_mock(self.monitor, "monitor")
+        with patch.object(main, "sleep", side_effect=KeyboardInterrupt):
+            main.main()
+        names = [call[0] for call in calls.mock_calls]
+        self.assertLess(names.index("observer.stop"), names.index("observer.join"))
+        self.assertLess(names.index("observer.join"), names.index("monitor.stop"))
 
 
 if __name__ == "__main__":
