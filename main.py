@@ -6,7 +6,7 @@ import sys
 import webbrowser
 from collections import OrderedDict
 from mimetypes import guess_type
-from os import fstat, getenv, stat, stat_result
+from os import fstat, getcwd, getenv, stat, stat_result
 from os.path import basename, dirname, exists, isdir, isfile, join, splitext
 from queue import Empty, Queue
 from stat import S_ISREG
@@ -38,9 +38,12 @@ UPLOAD_OPTIONS: dict[str, str] = {
     "x-zipline-original-name": "false",
 }
 
-ENV_PATH = join(dirname(__file__), ".env")
-load_dotenv(ENV_PATH)  # checkout: .env next to main.py
-load_dotenv()          # installed script: .env in the current directory
+ENV_PATH = join(getcwd(), ".env")
+CHECKOUT_ENV_PATH = join(dirname(__file__), ".env")
+# Explicit environment values win, followed by the working directory and checkout fallback.
+load_dotenv(ENV_PATH)
+if ENV_PATH != CHECKOUT_ENV_PATH:
+    load_dotenv(CHECKOUT_ENV_PATH)
 
 log = logging.getLogger("zipline")
 
@@ -168,7 +171,12 @@ def print_banner() -> None:
     host = urlparse(API_UPLOAD_URL).netloc or API_UPLOAD_URL
     types = ", ".join(ext.lstrip(".") for ext in VALID_EXTENSIONS)
     rule = _gradient_rule()
-    config_source = ".env loaded" if exists(ENV_PATH) else "defaults (no .env — copy .env.example)"
+    if exists(ENV_PATH):
+        config_source = "working-directory .env + environment"
+    elif exists(CHECKOUT_ENV_PATH):
+        config_source = "checkout .env + environment"
+    else:
+        config_source = "environment variables"
     browser = (
         _paint("enabled", _GREEN) if OPEN_URL_IN_BROWSER else _paint("disabled", _AMBER)
     )

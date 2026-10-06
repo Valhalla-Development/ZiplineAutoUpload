@@ -89,6 +89,11 @@ LOG_LEVEL=INFO
 LOG_FILE=
 ```
 
+Configuration is loaded in this order: existing environment variables, `.env` in
+the current working directory, then `.env` beside `main.py` as a fallback.
+Earlier values take precedence. This also applies to the installed
+`zipline-auto-upload` command. `MONITOR_FOLDER_PATH` must point to a directory.
+
 ## 🎬 Usage
 
 1. Start the Upload:
@@ -103,6 +108,21 @@ LOG_FILE=
    - 📋 URL copied to clipboard
    - 🌐 Opened in browser (if enabled)
 
+Files are checked again when they reach the upload worker. Size, modification
+time, and file identity must remain unchanged for one second before reading.
+Each upload uses a snapshot smaller than 40 MiB, and retries send the same bytes.
+Renames into the monitored folder and supported close-write events are handled.
+An unchanged file version is remembered for the 32 most recently uploaded paths;
+events received while a file is queued or uploading do not add duplicate work.
+
+The quiet period is a readiness heuristic. For producers that pause during long
+writes, save under a temporary unsupported extension and rename to the final
+supported extension when writing is complete.
+
+Pressing Ctrl+C stops monitoring, cancels pending uploads, and allows any active
+HTTP request to finish. File readiness checks and retry delays are interrupted.
+The process may wait for the active request's configured network timeout.
+
 ## 📊 What to Expect
 
 When running, you'll see:
@@ -115,7 +135,7 @@ When running, you'll see:
   Types        png, jpg, jpeg, mov
   Limit        40 MB
   Browser      disabled
-  Config       .env loaded
+  Config       working-directory .env + environment
   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   Ready to upload.  Ctrl+C to stop · LOG_LEVEL=DEBUG for more detail
 
@@ -123,6 +143,15 @@ When running, you'll see:
 ```
 
 ## 🤝 Contributing
+
+Run the local checks before submitting changes:
+
+```bash
+ruff check .
+python -m unittest discover -s tests -v
+```
+
+The tests use temporary files and mocked HTTP, clipboard, and browser operations.
 
 Want to make this even more awesome? Here's how:
 
@@ -133,7 +162,7 @@ Want to make this even more awesome? Here's how:
    ```
 3. Commit your changes:
    ```bash
-   git commit -m 'Add some amazing feature'
+   git commit -m '✨ (uploads): add a new upload option'
    ```
 4. Push to the branch:
    ```bash
