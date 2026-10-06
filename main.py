@@ -6,9 +6,10 @@ import sys
 import webbrowser
 from collections import OrderedDict
 from mimetypes import guess_type
-from os import getenv
-from os.path import basename, dirname, exists, getsize, isfile, join, splitext
-from queue import Queue
+from os import fstat, getenv, stat, stat_result
+from os.path import basename, dirname, exists, isdir, isfile, join, splitext
+from queue import Empty, Queue
+from stat import S_ISREG
 from threading import Event, Lock, Thread, Timer
 from time import monotonic, sleep
 from urllib.parse import urlparse
@@ -24,9 +25,8 @@ VALID_EXTENSIONS_SET = {ext.lower() for ext in VALID_EXTENSIONS}  # .PNG, .Mov, 
 MAX_FILE_SIZE_MB: int = 40
 
 # created + a burst of modified while the OS is still writing (screenshots, .mov).
-STABLE_QUIET_S: float = 0.4
+STABLE_QUIET_S: float = 1.0
 STABLE_TIMEOUT_S: float = 120  # long screen recordings
-RECENT_COOLDOWN_S: float = 2.0  # Finder/Spotlight often touch the file again after save
 UPLOAD_TIMEOUT_FLOOR_S: float = 30.0
 UPLOAD_BYTES_PER_S: float = 256 * 1024
 UPLOAD_ATTEMPTS: int = 3
@@ -194,57 +194,71 @@ def print_banner() -> None:
     print()
 
 
+FileSignature = tuple[int, int, int, int]
+
+
+def _signature(info: stat_result) -> FileSignature:
+    """Identify the file and the version of its content observed on disk."""
+    return info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns
+
+
+def file_signature(path: str) -> FileSignature:
+    return _signature(stat(path))
+
+
 def validate_file(path: str) -> bool:
     """True if this path is a non-hidden file we should upload."""
     # .DS_Store, AppleDouble, screenshot temps
-    if not isfile(path) or basename(path).startswith("."):
+    if basename(path).startswith("."):
         return False
-
     if splitext(path)[1].lower() not in VALID_EXTENSIONS_SET:
         log.warning("%s: unsupported extension (want %s)",
                     basename(path), ", ".join(VALID_EXTENSIONS))
         return False
-
-    # 1 << 20 == 1 MiB. `>=` means exactly MAX_FILE_SIZE_MB is also rejected.
-    if getsize(path) >= MAX_FILE_SIZE_MB * (1 << 20):
-        log.warning("%s: %.2f MB exceeds %s MB limit",
-                    basename(path), getsize(path) / (1 << 20), MAX_FILE_SIZE_MB)
+    try:
+        info = stat(path)
+    except OSError:
+        return False  # deleted / not yet readable
+    if not S_ISREG(info.st_mode) or info.st_size == 0:
         return False
-
+    # 1 << 20 == 1 MiB. `>=` means exactly MAX_FILE_SIZE_MB is also rejected.
+    if info.st_size >= MAX_FILE_SIZE_MB * (1 << 20):
+        log.warning("%s: %.2f MB exceeds %s MB limit",
+                    basename(path), info.st_size / (1 << 20), MAX_FILE_SIZE_MB)
+        return False
     return True
 
 
-def wait_until_stable(path: str) -> bool:
-    """True once size is unchanged for STABLE_QUIET_S. False if it vanishes or times out."""
+def wait_until_stable(path: str, stop: Event | None = None) -> bool:
+    """Wait for unchanged size, mtime and identity; stop on deletion or cancellation."""
     deadline = monotonic() + STABLE_TIMEOUT_S
-    last_size = -1
+    previous: FileSignature | None = None
     last_change = monotonic()
     while monotonic() < deadline:
-        if not isfile(path):
+        if (stop is not None and stop.is_set()) or not isfile(path):
             return False
         try:
-            size = getsize(path)
+            signature = file_signature(path)
         except OSError:
             return False  # deleted / not yet readable
         now = monotonic()
-        if size != last_size:
-            last_size = size
+        if signature != previous:
+            previous = signature
             last_change = now
         elif now - last_change >= STABLE_QUIET_S:
             return True
-        sleep(0.05)  # keep this well under STABLE_QUIET_S
-    log.warning("%s never settled (still growing, vanished, or hit %ss)",
+        if stop is None:
+            sleep(0.05)  # keep this well under STABLE_QUIET_S
+        elif stop.wait(0.05):
+            return False
+    log.warning("%s never settled (still changing or hit %ss)",
                 basename(path), int(STABLE_TIMEOUT_S))
     return False
 
 
-def upload_timeout_s(path: str) -> float:
-    """HTTP timeout from file size so a 40MB .mov isn't killed at 10s."""
-    try:
-        size = getsize(path)
-    except OSError:
-        return UPLOAD_TIMEOUT_FLOOR_S
-    return max(UPLOAD_TIMEOUT_FLOOR_S, size / UPLOAD_BYTES_PER_S + 15.0)
+def upload_timeout_s(size_bytes: int) -> float:
+    """HTTP timeout from snapshot size so a 40MB .mov isn't killed at 10s."""
+    return max(UPLOAD_TIMEOUT_FLOOR_S, size_bytes / UPLOAD_BYTES_PER_S + 15.0)
 
 
 def _body_snippet(response: requests.Response) -> str:
@@ -290,20 +304,37 @@ class MonitorFolder(FileSystemEventHandler):
     def __init__(self):
         self._lock = Lock()
         self._pending: dict[str, Timer] = {}  # path -> coalescing timer
-        self._recent: OrderedDict[str, float] = OrderedDict()  # path -> last upload time
-        self._queue: Queue = Queue()
+        self._active: set[str] = set()  # paths queued or currently uploading
+        self._dirty: set[str] = set()  # paths touched while active
+        self._recent: OrderedDict[str, FileSignature] = OrderedDict()
+        self._queue: Queue[str | None] = Queue()
         self._stop = Event()
-        self._worker = Thread(target=self._run_worker, name="upload-worker", daemon=True)
+        self._worker = Thread(target=self._run_worker, name="upload-worker")
         self._worker.start()
 
     def stop(self) -> None:
         with self._lock:
-            for timer in self._pending.values():
-                timer.cancel()
-            self._pending.clear()
-        self._stop.set()
-        self._queue.put(None)  # wake the worker
-        self._worker.join(timeout=8)
+            if not self._stop.is_set():
+                self._stop.set()
+                cancelled = len(self._pending)
+                for timer in self._pending.values():
+                    timer.cancel()
+                self._pending.clear()
+                # Cancel waiting work; an active HTTP request is allowed to finish.
+                while True:
+                    try:
+                        path = self._queue.get_nowait()
+                    except Empty:
+                        break
+                    if path is not None:
+                        self._active.discard(path)
+                        cancelled += 1
+                    self._queue.task_done()
+                self._dirty.clear()
+                self._queue.put(None)  # wake the worker
+                if cancelled:
+                    log.info("cancelled %s pending upload(s) during shutdown", cancelled)
+        self._worker.join()
 
     def _interesting(self, path: str) -> bool:
         """Cheap pre-filter so we don't arm a timer for every Desktop file."""
@@ -314,79 +345,118 @@ class MonitorFolder(FileSystemEventHandler):
     def _schedule(self, path: str) -> None:
         # Reset: only the last event in a created/modified burst should fire.
         with self._lock:
+            if self._stop.is_set():
+                return
+            if path in self._active:
+                self._dirty.add(path)
+                return
             existing = self._pending.pop(path, None)
             if existing is not None:
                 existing.cancel()
-            timer = Timer(STABLE_QUIET_S, self._process, args=(path,))
-            timer.daemon = True  # don't block process exit on ctrl+c
+            timer = Timer(STABLE_QUIET_S, lambda: self._process(path, timer))
+            timer.daemon = True  # cancellation must not block process exit
             self._pending[path] = timer
             timer.start()
 
-    def _process(self, path: str) -> None:
+    def _process(self, path: str, timer: Timer | None = None) -> None:
         with self._lock:
-            self._pending.pop(path, None)
-        if not wait_until_stable(path):
-            return
-        if not validate_file(path):
-            return
-        now = monotonic()
-        with self._lock:
-            uploaded_at = self._recent.get(path)
-            if uploaded_at is not None and now - uploaded_at < RECENT_COOLDOWN_S:
+            # A cancelled timer may already be running. Only the current one owns the path.
+            if self._stop.is_set() or (timer is not None and self._pending.get(path) is not timer):
                 return
-            # Claim before POST so two timers can't upload the same path.
-            self._recent[path] = now
-            self._recent.move_to_end(path)
-            while len(self._recent) > 32:
-                self._recent.popitem(last=False)
-        self._queue.put(path)
+            self._pending.pop(path, None)
+            if path in self._active:
+                self._dirty.add(path)
+                return
+            self._active.add(path)
+            self._queue.put(path)
+
+    def _upload_path(self, path: str) -> None:
+        # Readiness must be checked when dequeued, not before a potentially long queue wait.
+        if not wait_until_stable(path, self._stop) or not validate_file(path):
+            return
+        signature = file_signature(path)
+        with self._lock:
+            if self._recent.get(path) == signature:
+                return
+        try:
+            if self.upload_file(path, expected=signature):
+                with self._lock:
+                    self._recent[path] = signature
+                    self._recent.move_to_end(path)
+                    while len(self._recent) > 32:
+                        self._recent.popitem(last=False)
+        finally:
+            try:
+                changed = file_signature(path) != signature
+            except OSError:
+                changed = False
+            if changed:
+                with self._lock:
+                    self._dirty.add(path)
 
     def _run_worker(self) -> None:
-        while not self._stop.is_set():
+        while True:
             path = self._queue.get()
-            if path is None:
-                break
             try:
-                self.upload_file(path)
+                if path is None:
+                    return
+                if not self._stop.is_set():
+                    self._upload_path(path)
             except Exception:
                 # A failed file must not stop the only upload worker.
                 log.exception("unexpected error uploading %s", basename(path))
             finally:
+                if path is not None:
+                    with self._lock:
+                        self._active.discard(path)
+                        dirty = path in self._dirty
+                        self._dirty.discard(path)
+                    if dirty:
+                        self._schedule(path)
                 self._queue.task_done()
 
-    def upload_file(self, path: str):
-        # Raw token, not "Bearer …" — this Zipline version expects it that way.
+    def upload_file(self, path: str, expected: FileSignature | None = None) -> bool:
+        # Snapshot once so retries send the same bytes even if the original is changed or deleted.
+        if self._stop.is_set() or not validate_file(path):
+            return False
+        try:
+            with open(path, "rb") as file:
+                before = fstat(file.fileno())
+                if not S_ISREG(before.st_mode) or (expected is not None and _signature(before) != expected):
+                    log.debug("%s changed before reading; waiting for the next version", basename(path))
+                    return False
+                limit = MAX_FILE_SIZE_MB * (1 << 20)
+                if before.st_size == 0 or before.st_size >= limit:
+                    return False
+                payload = file.read(limit)
+                if _signature(fstat(file.fileno())) != _signature(before) or len(payload) != before.st_size:
+                    log.debug("%s changed while reading; waiting for the next version", basename(path))
+                    return False
+        except OSError as e:
+            log.error("cannot read %s: %s", basename(path), e)
+            return False
+
+        # Raw token, not "Bearer ...": this Zipline version expects it that way.
         headers = {"Authorization": USER_ACCESS_TOKEN, **UPLOAD_OPTIONS}
-        timeout = upload_timeout_s(path)
+        timeout = upload_timeout_s(len(payload))
         last_error = None
 
         for attempt in range(1, UPLOAD_ATTEMPTS + 1):
+            if self._stop.is_set():
+                return False
             try:
-                with open(path, "rb") as file:
-                    files = {
-                        "file": (
-                            basename(path),
-                            file,
-                            _mime_type(path),
-                        )
-                    }
-                    response = requests.post(
-                        API_UPLOAD_URL,
-                        headers=headers,
-                        files=files,
-                        timeout=timeout,
-                    )
-            except PermissionError as e:
-                log.error("permission error reading %s: %s", basename(path), e)
-                return
+                files = {"file": (basename(path), payload, _mime_type(path))}
+                response = requests.post(
+                    API_UPLOAD_URL,
+                    headers=headers,
+                    files=files,
+                    timeout=timeout,
+                )
             except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
                 last_error = str(e)
             except requests.exceptions.RequestException as e:
                 log.error("upload failed: %s", e)
-                return
-            except OSError as e:
-                log.error("cannot read %s: %s", basename(path), e)
-                return
+                return False
             else:
                 if response.status_code in (401, 403):
                     log.error(
@@ -394,42 +464,40 @@ class MonitorFolder(FileSystemEventHandler):
                         response.status_code,
                         _body_snippet(response),
                     )
-                    return
+                    return False
                 if response.status_code in RETRY_STATUSES:
                     last_error = f"HTTP {response.status_code} {_body_snippet(response)}"
                 elif not response.ok:
                     log.error("upload failed: HTTP %s %s", response.status_code, _body_snippet(response))
-                    return
+                    return False
                 else:
                     file_url = _file_url(response)
                     if not file_url:
-                        return
-                    try:
-                        size_mb = getsize(path) / (1 << 20)
-                    except OSError:
-                        size_mb = 0.0
-                    log.info("uploaded %s (%.2f MB) -> %s", basename(path), size_mb, file_url)
+                        return False
+                    log.info("uploaded %s (%.2f MB) -> %s", basename(path), len(payload) / (1 << 20), file_url)
                     try:
                         pyperclip.copy(file_url)
                     except pyperclip.PyperclipException as e:
                         log.warning("uploaded, but clipboard copy failed: %s", e)
                     if OPEN_URL_IN_BROWSER:
                         webbrowser.open(file_url)
-                    return
+                    return True
 
             if attempt < UPLOAD_ATTEMPTS:
                 delay = 2 ** (attempt - 1)  # 1s, then 2s
                 log.warning("retry %s/%s in %ss: %s", attempt, UPLOAD_ATTEMPTS, delay, last_error)
-                sleep(delay)
+                if self._stop.wait(delay):
+                    return False
 
         log.error("upload failed after %s attempts: %s", UPLOAD_ATTEMPTS, last_error)
+        return False
 
     def on_any_event(self, event):
-        if event.event_type not in ["created", "modified"]:
+        if event.event_type not in {"created", "modified", "moved", "closed"}:
             return
         if event.is_directory:
             return
-        path = event.src_path
+        path = event.dest_path if event.event_type == "moved" else event.src_path
         if not self._interesting(path):
             return
         log.debug("%s %s", event.event_type, basename(path))
@@ -437,9 +505,9 @@ class MonitorFolder(FileSystemEventHandler):
 
 
 def main():
-    if not exists(MONITOR_FOLDER_PATH):
+    if not isdir(MONITOR_FOLDER_PATH):
         raise ConfigError(
-            f"\n  MONITOR_FOLDER_PATH does not exist: {MONITOR_FOLDER_PATH}\n"
+            f"\n  MONITOR_FOLDER_PATH is not a directory: {MONITOR_FOLDER_PATH}\n"
             f"  Fix the path in .env and try again.\n"
         )
 
@@ -447,17 +515,19 @@ def main():
 
     event_handler = MonitorFolder()
     observer = Observer()
-    observer.schedule(event_handler, path=MONITOR_FOLDER_PATH, recursive=False)
-    observer.start()
-
     try:
+        observer.schedule(event_handler, path=MONITOR_FOLDER_PATH, recursive=False)
+        observer.start()
         while True:
             sleep(1)  # watchdog runs on its own thread; this just keeps us alive
     except KeyboardInterrupt:
-        log.info("stopped")
-        event_handler.stop()
+        log.info("stopping; allowing the active upload to finish")
+    finally:
         observer.stop()
-        observer.join()
+        if observer.is_alive():
+            observer.join()
+        event_handler.stop()
+        log.info("stopped")
 
 
 if __name__ == "__main__":
