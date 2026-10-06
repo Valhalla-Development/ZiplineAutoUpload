@@ -254,7 +254,7 @@ def _body_snippet(response: requests.Response) -> str:
     return text or "(empty body)"
 
 
-def _file_url(response: requests.Response):
+def _file_url(response: requests.Response) -> str | None:
     """Pull files[0].url out of a Zipline upload JSON, or None if the shape is wrong."""
     try:
         data = response.json()
@@ -267,8 +267,16 @@ def _file_url(response: requests.Response):
         return None
     first = files[0]
     url = first.get("url") if isinstance(first, dict) else None
-    if not url:
-        log.error("upload response had no file URL: %s", _body_snippet(response))
+    if not isinstance(url, str) or not url.strip():
+        log.error("upload response had no valid file URL: %s", _body_snippet(response))
+        return None
+    url = url.strip()
+    try:
+        parsed = urlparse(url)
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+            raise ValueError("expected an HTTP(S) URL")
+    except ValueError:
+        log.error("upload response had an invalid file URL: %s", _body_snippet(response))
         return None
     return url
 
@@ -340,6 +348,9 @@ class MonitorFolder(FileSystemEventHandler):
                 break
             try:
                 self.upload_file(path)
+            except Exception:
+                # A failed file must not stop the only upload worker.
+                log.exception("unexpected error uploading %s", basename(path))
             finally:
                 self._queue.task_done()
 
@@ -372,6 +383,9 @@ class MonitorFolder(FileSystemEventHandler):
                 last_error = str(e)
             except requests.exceptions.RequestException as e:
                 log.error("upload failed: %s", e)
+                return
+            except OSError as e:
+                log.error("cannot read %s: %s", basename(path), e)
                 return
             else:
                 if response.status_code in (401, 403):
